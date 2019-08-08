@@ -272,11 +272,12 @@ func (c *Cursor) next() (key []byte, value []byte, flags uint32) {
 }
 
 // [M]
-// search 递归地在检索路径上的每个节点执行折半查找，由于 DB 中的 B+Tree 较矮，因此整个过程的算法复杂度可以理解成 C1*logC2*log(N)
-//   即 O(log(N)), 除此之外，实现上 search 的递归都是尾递归，如果编译器支持可以得到优化
+// search 递归地在检索路径上的每个节点执行折半查找，由于 DB 中的 B+Tree 较矮，因此整个过程的算法复杂度可以理解成 C*logC*log(N)
+//   即 O(log(N))，如果将树的高度近似为常数，那么最终算法复杂度约为 O(1)。值得一提的是，实现上 search 的递归都是尾递归。
 // search performs binary searches against every page/node along the way down to the leaf. Because B+Tree in
-//   db is usually shallow, the time complexity can be reduced to C1logC2log(N), or O(log(N)) in big-O notation.
-//   Besides, the implementation uses tail call, which can be optimized if the compiler support tail-call optimization.
+//   db is usually shallow, the time complexity can be reduced to ClogClog(N), or O(log(N)) in big-O notation.
+//   If we takes the height of the tree as constant, the overall time complexity can be reduced to O(1). By the way,
+//   the implementation uses tail-call, though the performance improvement looks limited.
 // search recursively performs a binary search against a given page/node until it finds a given key.
 func (c *Cursor) search(key []byte, pgid pgid) {
 	p, n := c.bucket.pageNode(pgid)
