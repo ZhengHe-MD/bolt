@@ -42,6 +42,10 @@ func (c *Cursor) First() (key []byte, value []byte) {
 	}
 
 	k, v, flags := c.keyValue()
+	// [M]
+	// 如果不是 leaf bucket，即是 branch bucket，返回时将值置为 nil，代表这是一个 bucket，而不是普通数据。
+	// If it is not a leaf bucket, it must be a branch bucket. Change the value returned to nil,
+	// in order to tell this is a bucket, instead of a normal data value.
 	if (flags & uint32(bucketLeafFlag)) != 0 {
 		return k, nil
 	}
@@ -149,11 +153,21 @@ func (c *Cursor) Delete() error {
 	return nil
 }
 
+// [M]
+// first, last, seek, next 这些私有方法只负责移动 cursor，而与之对应的
+//   First, Last, Seek, Next 这些公共方法会在移动 cursor 之后读取数据
+//
+// first, last, seek and next are only responsible for moving the cursor, and their exported
+//   counterparts, First, Last, Seek and Next will read the data after moving the cursor.
+
+
 // seek moves the cursor to a given key and returns it.
 // If the key does not exist then the next key is used.
 func (c *Cursor) seek(seek []byte) (key []byte, value []byte, flags uint32) {
 	_assert(c.bucket.tx.db != nil, "tx closed")
 
+	// [M]
+	// 每次检索都从 root page/node 开始，search 负责将 cursor 移动到目标位置
 	// Start from root page/node and traverse to correct page.
 	c.stack = c.stack[:0]
 	c.search(seek, c.bucket.root)
@@ -170,6 +184,9 @@ func (c *Cursor) seek(seek []byte) (key []byte, value []byte, flags uint32) {
 
 // first moves the cursor to the first leaf element under the last page in the stack.
 func (c *Cursor) first() {
+	// [M]
+	// 如果不是 leaf page/node，会不断地将路径上的 branch pages/nodes 压入栈中
+	// if it is not a leaf page/node, it will continue pushing branch pages/nodes into the stack
 	for {
 		// Exit when we hit a leaf page.
 		var ref = &c.stack[len(c.stack)-1]
@@ -236,6 +253,11 @@ func (c *Cursor) next() (key []byte, value []byte, flags uint32) {
 
 		// Otherwise start from where we left off in the stack and find the
 		// first element of the first leaf page.
+
+		// [M]
+		// 因为上面的 i 在结束循环前多减了 1，因此这边要加回来
+		// because we decrement i one more time than necessary to break for loop, we need
+		// to add it back.
 		c.stack = c.stack[:i+1]
 		c.first()
 
@@ -249,6 +271,12 @@ func (c *Cursor) next() (key []byte, value []byte, flags uint32) {
 	}
 }
 
+// [M]
+// search 递归地在检索路径上的每个节点执行折半查找，由于 DB 中的 B+Tree 较矮，因此整个过程的算法复杂度可以理解成 C1*logC2*log(N)
+//   即 O(log(N)), 除此之外，实现上 search 的递归都是尾递归，如果编译器支持可以得到优化
+// search performs binary searches against every page/node along the way down to the leaf. Because B+Tree in
+//   db is usually shallow, the time complexity can be reduced to C1logC2log(N), or O(log(N)) in big-O notation.
+//   Besides, the implementation uses tail call, which can be optimized if the compiler support tail-call optimization.
 // search recursively performs a binary search against a given page/node until it finds a given key.
 func (c *Cursor) search(key []byte, pgid pgid) {
 	p, n := c.bucket.pageNode(pgid)

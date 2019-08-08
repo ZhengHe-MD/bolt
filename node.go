@@ -11,12 +11,18 @@ import (
 type node struct {
 	bucket     *Bucket
 	isLeaf     bool
+	// [M]
+	// 当从 node 中删除元素时，node 可能处于不平衡的状态
+	// When removing elements in node, the node can be unbalanced.
 	unbalanced bool
 	spilled    bool
 	key        []byte
 	pgid       pgid
 	parent     *node
 	children   nodes
+	// [M]
+	// inodes 中保存 node 中的数据。对于 branch node 来说是键数据；对于 leaf node 来说是键值对数据
+	// inodes keep node's data, keys for branch node, key-value pair for leaf node
 	inodes     inodes
 }
 
@@ -154,6 +160,9 @@ func (n *node) del(key []byte) {
 	n.inodes = append(n.inodes[:index], n.inodes[index+1:]...)
 
 	// Mark the node as needing rebalancing.
+	// [M]
+	// 仅仅是标记该节点可能不平衡，并非一定不平衡
+	// This flag really means the node can be unbalanced, but not necessary
 	n.unbalanced = true
 }
 
@@ -179,6 +188,9 @@ func (n *node) read(p *page) {
 	}
 
 	// Save first key so we can find the node in the parent when we spill.
+	// [M]
+	// n.key 帮助我们确定 node 在其 parent node 中的位置
+	// n.key helps us find the position of the node in its parent node
 	if len(n.inodes) > 0 {
 		n.key = n.inodes[0].key
 		_assert(len(n.key) > 0, "read: zero-length node key")
@@ -207,6 +219,9 @@ func (n *node) write(p *page) {
 	}
 
 	// Loop over each item and write it to the page.
+	// [M]
+	// b 永远指向 page 中下一条数据（键或键值对）应该被写入的地方
+	// b always points to the next place where the page data (k or kv) should be put
 	b := (*[maxAllocSize]byte)(unsafe.Pointer(&p.ptr))[n.pageElementSize()*len(n.inodes):]
 	for i, item := range n.inodes {
 		_assert(len(item.key) > 0, "write: zero-length inode key")
@@ -251,6 +266,9 @@ func (n *node) split(pageSize int) []*node {
 	var nodes []*node
 
 	node := n
+	// [M]
+	// 不断将 node 分裂成两个，直到无法继续分裂位置。算法的设计上很想欧几里得算法求最大公约数。
+	// keep splitting the node into two nodes until it's impossible, like Euclidean algorithm.
 	for {
 		// Split node into two.
 		a, b := node.splitTwo(pageSize)
@@ -345,6 +363,8 @@ func (n *node) spill() error {
 	// Spill child nodes first. Child nodes can materialize sibling nodes in
 	// the case of split-merge so we cannot use a range loop. We have to check
 	// the children size on every loop iteration.
+	// This is in a form of post-order traversal
+	// 形式上是一个后续遍历
 	sort.Sort(n.children)
 	for i := 0; i < len(n.children); i++ {
 		if err := n.children[i].spill(); err != nil {
