@@ -664,6 +664,13 @@ func (db *DB) View(fn func(*Tx) error) error {
 func (db *DB) Batch(fn func(*Tx) error) error {
 	errCh := make(chan error, 1)
 
+	// [M]
+	// db.batch == nil => 尚未建立过 batch/no batch has been created
+	// len(db.batch.calls) >= db.MaxBatchSize => 上一次 Batch 已经触发了执行 // last batch has been executed
+	//
+	// 当以上两个条件之一发生时，就创建新的 batch, db.batchMu 用于保证这个过程是线程安全的
+	// When any one of the two conditions is satisfied, create a new batch, db.batchMu is used
+	//   to guarantee the process is thread-safe.
 	db.batchMu.Lock()
 	if (db.batch == nil) || (db.batch != nil && len(db.batch.calls) >= db.MaxBatchSize) {
 		// There is no existing batch, or the existing batch is full; start a new one.
@@ -694,6 +701,9 @@ type call struct {
 type batch struct {
 	db    *DB
 	timer *time.Timer
+	// [M]
+	// 保证每个 batch 只被运行一次
+	// guarantee each batch will be executed only once
 	start sync.Once
 	calls []call
 }
