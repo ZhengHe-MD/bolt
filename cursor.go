@@ -405,6 +405,14 @@ func (c *Cursor) node() *node {
 	return n
 }
 
+// [M]
+// elemRef 什么时候指向 page，什么时候指向 node？当事务只读取数据时，直接读取 page 中的元素即可；
+//   当事务需要更新数据时，就需要将 page 反序列化成 node，在 node 上执行更新操作，写出数据时再序列化
+//   成新的 page
+// When does elemRef point to a page, and when to a node? When it is a read-only tx, we
+//   just go ahead and read elements in page. When it is a read-write tx, we have to deserialize
+//   the page into a node, and do updates on that node. Finally serialize the node into dirty
+//   pages and written out to disk.
 // elemRef represents a reference to an element on a given page/node.
 type elemRef struct {
 	page  *page

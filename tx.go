@@ -23,6 +23,9 @@ type txid uint64
 // quickly grow.
 type Tx struct {
 	writable       bool
+	// [M]
+	// 当 managed 为 true 时，用户不能自行 rollback 或 commit
+	// When managed is set to true, user is not allowed to rollback or commit a transaction on his own.
 	managed        bool
 	db             *DB
 	meta           *meta
@@ -49,6 +52,10 @@ func (tx *Tx) init(db *DB) {
 	tx.meta = &meta{}
 	db.meta().copy(tx.meta)
 
+	// [M]
+	// 由于在读写事务的执行过程中 root bucket 可能被修改，因此不论是只读事务还是读写
+	//   事务在初始化时都需要复制 root bucket
+	// Copy the root bucket since it can be changed by the writer.
 	// Copy over the root bucket.
 	tx.root = newBucket(tx)
 	tx.root.bucket = &bucket{}
@@ -56,7 +63,16 @@ func (tx *Tx) init(db *DB) {
 
 	// Increment the transaction id and add a page cache for writable transactions.
 	if tx.writable {
+		// [M]
+		// 只读事务的缓存读由 mmap 管理；而读写事务可能需要申请新的 pages 并写入数据，因此需要单独管理缓存
+		// The read cache is managed by mmap in read-only tx. In read-write tx, we have to
+		//   control cache ourselves.
 		tx.pages = make(map[pgid]*page)
+		// [M]
+		// txid 用于支持 MVCC，只读事务不会改变数据，即不会产生新版本的数据，因此也就无需增加
+		// txid is useful in implementing MVCC. There is no need to increment the txid
+		//   in read-only tx, since read-only tx won't change the data, leading to no
+		//   new versions of data.
 		tx.meta.txid += txid(1)
 	}
 }
@@ -166,11 +182,23 @@ func (tx *Tx) Commit() error {
 	}
 	tx.stats.SpillTime += time.Since(startTime)
 
+	// [M]
+	// root bucket 可能在 spill 的过程中发生变化，因此这里需要更新 meta.root.root
+	// root bucket can be changed during spill.
 	// Free the old root bucket.
 	tx.meta.root.root = tx.root.root
 
 	opgid := tx.meta.pgid
 
+	// [M]
+	// 每次读写事务 commit 时 freelist 长度可能减小或增加，为了逻辑简单，每次都直接
+	//   分配新的 freelist，释放旧的 freelist。因此如果使用 bolt pages 查看 boltdb
+	//   实例，可以发现每次读写事务过后 freelist page 的位置都会发生变化。
+	// Whenever a read-write tx commits, the freelist length can be longer or
+	//   shorter. In order to keep the logic simple, just free the freelist and
+	//   re-allocate a new freelist. Due to this, every time a read-write tx commits,
+	//   you can use `bolt pages` command to find out that the freelist page has
+	//   been moved to another place.
 	// Free the freelist and allocate new pages for it. This will overestimate
 	// the size of the freelist but not underestimate the size (which would be bad).
 	tx.db.freelist.free(tx.meta.txid, tx.db.page(tx.meta.freelist))
@@ -251,6 +279,16 @@ func (tx *Tx) rollback() {
 		return
 	}
 	if tx.writable {
+		// [M]
+		// 首先，rollback 将与读写事务相关的 pages 从 pending 和 cache 中删除。此时，f.ids 与 f.cache 的数据
+		//   与该读写事务开始前的数据不一致，而 f.pending 的数据与该读写事务开始前的数据一致。于是 reload 从 meta
+		//   中重新获取一份 f.ids，利用 f.pending 的数据恢复 f.ids，再利用 f.pending 和 f.ids 一起恢复 f.cache
+		//   的数据 (reindex)。
+		// first, 'rollback' remove pages related to the given read-write transaction from pending
+		//   and cache. At this moment, f.ids and f.cache data are not consistent, while f.pending
+		//   data stay the same with the version before that read-write transaction. Then 'reload'
+		//   gets a copy of f.ids before the transaction, and recover f.ids according to f.pending,
+		//   then recover f.cache from both f.ids and f.pending.
 		tx.db.freelist.rollback(tx.meta.txid)
 		tx.db.freelist.reload(tx.db.page(tx.db.meta().freelist))
 	}

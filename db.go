@@ -527,6 +527,10 @@ func (db *DB) beginRWTx() (*Tx, error) {
 	t.init(db)
 	db.rwtx = t
 
+	// [M]
+	// 找到所有事务中 txid 的最小值，然后将小于它的所有事务的 pending pages 回收
+	// find the minimum txid (minid) of existing transactions, then release all pending pages
+	//   from transactions happened before the minid transaction.
 	// Free any pages associated with closed read-only transactions.
 	var minid txid = 0xFFFFFFFFFFFFFFFF
 	for _, t := range db.txs {

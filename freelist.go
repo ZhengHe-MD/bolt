@@ -106,9 +106,17 @@ func (f *freelist) allocate(n int) pgid {
 	return 0
 }
 
+// [M]
+// 读写事务释放的 pages 会被放入 pending 列表中，等待所有发生在读写事务之前的只读事务完成后才被回收。
+// pages freed by read-write transaction will be put in the pending list, and wait to be
+//   reclaimed when all read-only transactions happened before the read-write transaction
+//   finished.
 // free releases a page and its overflow for a given transaction id.
 // If the page is already free then a panic will occur.
 func (f *freelist) free(txid txid, p *page) {
+	// [M]
+	// page 0 和 1 是 meta pages，不能被释放
+	// page 0 and page 1 are meta pages, which must not be freed.
 	if p.id <= 1 {
 		panic(fmt.Sprintf("cannot free page 0 or 1: %d", p.id))
 	}
@@ -128,6 +136,8 @@ func (f *freelist) free(txid txid, p *page) {
 	f.pending[txid] = ids
 }
 
+// [M]
+// release 将所有早于给定读写事务发生的 pending pages 全部回收，并更新 freelist 的空闲列表，后者按照升序排列
 // release moves all page ids for a transaction id (or older) to the freelist.
 func (f *freelist) release(txid txid) {
 	m := make(pgids, 0)
@@ -143,6 +153,8 @@ func (f *freelist) release(txid txid) {
 	f.ids = pgids(f.ids).merge(m)
 }
 
+// [M]
+// rollback 将所有与该读写事务相关的 pending pages 和 cache pages 全部删除
 // rollback removes the pages from a given pending tx.
 func (f *freelist) rollback(txid txid) {
 	// Remove page ids from cache.
