@@ -46,12 +46,19 @@ func funlock(db *DB) error {
 
 // mmap memory maps a DB's data file.
 func mmap(db *DB, sz int) error {
+	// [M]
+	// syscall.PROT_READ 告诉操作系统只用 mmap 处理读缓冲；syscall.MAP_SHARED 告诉操作系统 mmap 后的内存区域
+	//   可供所有进程共享；
+	// syscall.PROT_READ tells os only use mmap for reading data. syscall.MAP_SHARED tells os the
+	//   mmapped data can be shared by different processes.
 	// Map the data file to memory.
 	b, err := syscall.Mmap(int(db.file.Fd()), 0, sz, syscall.PROT_READ, syscall.MAP_SHARED|db.MmapFlags)
 	if err != nil {
 		return err
 	}
 
+	// [M]
+	// syscall.MADV_RANDOM 告诉操作系统 mmap 的读取模式为随机访问，方便后者优化
 	// Advise the kernel that the mmap is accessed randomly.
 	if err := madvise(b, syscall.MADV_RANDOM); err != nil {
 		return fmt.Errorf("madvise: %s", err)

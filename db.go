@@ -876,6 +876,8 @@ func (db *DB) grow(sz int) error {
 		return nil
 	}
 
+	// [M]
+	// 数据库按块向操作系统申请空间，每块 16MB，当总大小小于 16MB 时，只分配需要的大小
 	// If the data is smaller than the alloc size then only allocate what's needed.
 	// Once it goes over the allocation size then allocate in chunks.
 	if db.datasz < db.AllocSize {
